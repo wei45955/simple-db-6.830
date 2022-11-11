@@ -70,11 +70,15 @@ public class HeapFile implements DbFile {
     // see DbFile.java for javadocs
     public Page readPage(PageId pid) {
         HeapPageId id = (HeapPageId) pid;
+        if (id.getPageNumber() > this.numPages()) {
+            throw new NoSuchElementException();
+        }
         int pageSize = BufferPool.getPageSize();
-        int pageOffset = id.getPageNumber() * pageSize;
+        long pageOffset = (long) id.getPageNumber() * pageSize;
         try (RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r")) {
             byte[] bytes = new byte[pageSize];
-            randomAccessFile.read(bytes, pageOffset, pageSize);
+            randomAccessFile.seek(pageOffset);
+            randomAccessFile.read(bytes);
 
             return new HeapPage(id, bytes);
         } catch (IOException e) {
