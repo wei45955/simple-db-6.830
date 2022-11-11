@@ -56,10 +56,10 @@ public class Catalog {
      * @param pkeyField the name of the primary key field
      */
     public void addTable(DbFile file, String name, String pkeyField) {
+        // 也就是说 tableId 的值，等于file.getId() 也就是 file 的绝对路径哈希值
         Table toAddTable = new Table(file, name, pkeyField);
         tableIdToTableMap.put(file.getId(), toAddTable);
         tableNameToTableIdMap.put(name, file.getId());
-
     }
 
     public void addTable(DbFile file, String name) {
