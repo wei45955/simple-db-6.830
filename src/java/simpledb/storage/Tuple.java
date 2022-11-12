@@ -27,7 +27,7 @@ public class Tuple implements Serializable {
      */
     public Tuple(TupleDesc td) {
         this.tupleDesc = td;
-        this.fields = new Field[td.getSize()];
+        this.fields = new Field[td.numFields()];
     }
 
     /**
@@ -89,15 +89,15 @@ public class Tuple implements Serializable {
         StringBuilder sb = new StringBuilder();
         int flag = 0;
         for (int i = 0; i < fields.length; i++) {
-            if(fields[i].getType() == Type.INT_TYPE) {
-                sb.append(((IntField)fields[i]).getValue());
-            } else {
-                sb.append(((StringField)fields[i]).getValue());
-            }
             if(flag == 0) {
                 flag = 1;
             } else {
                 sb.append('\t');
+            }
+            if(fields[i].getType() == Type.INT_TYPE) {
+                sb.append(((IntField)fields[i]).getValue());
+            } else {
+                sb.append(((StringField)fields[i]).getValue());
             }
         }
 
