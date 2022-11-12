@@ -127,7 +127,6 @@ class HeapFileIterator extends AbstractDbFileIterator {
     final TransactionId tid;
     final HeapFile heapFile;
 
-    HeapPage curPage;
     int nextPageNo;
     private Iterator<Tuple> tupleIterator;
 
@@ -147,6 +146,9 @@ class HeapFileIterator extends AbstractDbFileIterator {
      * Open this iterator by getting an iterator on the first page
      */
     public void open() throws DbException, TransactionAbortedException {
+        // should init the nextPageNo to 0, so it will iterate on the first page
+        // in rewind() may call open() twice or more
+        this.nextPageNo = 0;
         HeapPage firstPage = this.getNextPage();
         if(firstPage != null) {
             this.tupleIterator = firstPage.iterator();
@@ -195,6 +197,7 @@ class HeapFileIterator extends AbstractDbFileIterator {
      * close the iterator
      */
     public void close() {
+        // must call *** super.close() *** because the parent may do sth
         super.close();
         this.nextPageNo = 0;
         this.tupleIterator = null;
