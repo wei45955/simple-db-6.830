@@ -119,8 +119,9 @@ public class HeapFile implements DbFile {
     // see DbFile.java for javadocs
     public List<Page> insertTuple(TransactionId tid, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
-        if(!(t.getRecordId().getPageId() instanceof HeapPageId))
-            throw new DbException("HeapFile.insertTuple got tuple is Not heapPageId");
+        // 加了这个判断，导致InsertTest过不了，因为单元测试造的假数据，没有RecordId，所以会Null错误
+//        if(!(t.getRecordId().getPageId() instanceof HeapPageId))
+//            throw new DbException("HeapFile.insertTuple got tuple is Not heapPageId");
 
         // to look up a page to insert Tuple
         HeapPageId canInsertPageId = null;
@@ -151,8 +152,9 @@ public class HeapFile implements DbFile {
     // see DbFile.java for javadocs
     public ArrayList<Page> deleteTuple(TransactionId tid, Tuple t) throws DbException,
             TransactionAbortedException {
-        if(!(t.getRecordId().getPageId() instanceof HeapPageId))
-            throw new DbException("HeapFile.deleteTuple got tuple is Not heapPageId");
+        // 加了这个判断，导致InsertTest过不了，因为单元测试造的假数据，没有RecordId，所以会Null错误
+//        if(!(t.getRecordId().getPageId() instanceof HeapPageId))
+//            throw new DbException("HeapFile.deleteTuple got tuple is Not heapPageId");
 
         HeapPageId heapPageId = (HeapPageId) t.getRecordId().getPageId();
         Page gotBufferPage = Database.getBufferPool().getPage(tid, heapPageId, Permissions.READ_WRITE);
