@@ -3,15 +3,15 @@ package simpledb.storage;
 import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
-import simpledb.common.DeadlockException;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
-import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.io.*;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -37,7 +37,8 @@ public class BufferPool {
     public static final int DEFAULT_PAGES = 50;
 
     private final int numPages;
-    Map<PageId, Page> pagePoll = new ConcurrentHashMap<>();
+    private final Map<PageId, Page> pagePool = new ConcurrentHashMap<>();
+    private final Map<TransactionId, Set<PageId>> transactionPageMap  = new ConcurrentHashMap<>();
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -79,18 +80,22 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        // TODO pid 和 perm还未处理
+        // TODO perm还未处理
 
-        if(pagePoll.containsKey(pid)) {
-            return pagePoll.get(pid);
+        Set<PageId> pids = transactionPageMap.getOrDefault(tid, new HashSet<>());
+        pids.add(pid);
+        transactionPageMap.put(tid, pids);
+
+        if(pagePool.containsKey(pid)) {
+            return pagePool.get(pid);
         }
-        // bug fix 这里
-        if(pagePoll.size() >= this.numPages) {
+
+        if(pagePool.size() >= this.numPages) {
             this.evictPage();
         }
 
         Page gotPage = Database.getCatalog().getDatabaseFile(pid.getTableId()).readPage(pid);
-        pagePoll.put(pid, gotPage);
+        pagePool.put(pid, gotPage);
 
         return gotPage;
     }
@@ -180,7 +185,7 @@ public class BufferPool {
      * @param tid the transaction deleting the tuple.
      * @param t the tuple to delete
      */
-    public  void deleteTuple(TransactionId tid, Tuple t)
+    public void deleteTuple(TransactionId tid, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
 
         int tableId = t.getRecordId().getPageId().getTableId();
@@ -198,9 +203,9 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        // some code goes here
-        // not necessary for lab1
-
+        for(Map.Entry<PageId, Page> entry : pagePool.entrySet()) {
+            this.flushPage(entry.getKey());
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -212,34 +217,64 @@ public class BufferPool {
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
-        // some code goes here
-        // not necessary for lab1
+        this.pagePool.remove(pid);
     }
 
     /**
      * Flushes a certain page to disk
      * @param pid an ID indicating the page to flush
      */
-    private synchronized  void flushPage(PageId pid) throws IOException {
-        // some code goes here
-        // not necessary for lab1
+    private synchronized void flushPage(PageId pid) throws IOException {
+        if(!this.pagePool.containsKey(pid))
+            throw new RuntimeException("flash a nonexistent page in bufferPool");
+        Page toFlushPage = this.pagePool.get(pid);
+
+        if(toFlushPage.isDirty() != null) {
+            DbFile tableFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            tableFile.writePage(toFlushPage);
+            toFlushPage.markDirty(false, null);
+        }
     }
 
     /** Write all pages of the specified transaction to disk.
      */
-    public synchronized  void flushPages(TransactionId tid) throws IOException {
-        // some code goes here
-        // not necessary for lab1|lab2
+    public synchronized void flushPages(TransactionId tid) throws IOException {
+        if(!this.transactionPageMap.containsKey(tid))
+            return;
+        Set<PageId> list = this.transactionPageMap.get(tid);
+        for(PageId id : list) {
+            this.flushPage(id);
+        }
     }
 
     /**
      * Discards a page from the buffer pool.
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
-    private synchronized  void evictPage() throws DbException {
-        // some code goes here
-        // not necessary for lab1
-        throw new NotImplementedException();
+    private synchronized void evictPage() throws DbException {
+        // random pick
+        for (Page page : this.pagePool.values()) {
+            if (page.isDirty() != null)
+                continue;
+
+            try {
+                this.flushPage(page.getId());
+            } catch (IOException e) {
+                throw new DbException(e.getMessage());
+            }
+
+            this.pagePool.remove(page.getId());
+            break;
+        }
+
+        if(this.pagePool.size() == 0)
+            throw new DbException("Buffer pool size == 0");
+
+        try {
+            this.flushPage(this.pagePool.keySet().iterator().next());
+        } catch (IOException e) {
+            throw new DbException("flush page fail when evictPage");
+        }
     }
 
 }
