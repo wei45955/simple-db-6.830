@@ -1,7 +1,5 @@
 package simpledb.common;
 
-import javafx.scene.control.Tab;
-import simpledb.common.Type;
 import simpledb.storage.DbFile;
 import simpledb.storage.HeapFile;
 import simpledb.storage.TupleDesc;
@@ -126,8 +124,7 @@ public class Catalog {
     }
 
     public Iterator<Integer> tableIdIterator() {
-        // some code goes here
-        return null;
+        return this.tableIdToTableMap.keySet().iterator();
     }
 
     public String getTableName(int tableId) {
