@@ -1,12 +1,15 @@
 package simpledb.execution;
 
+import java.io.IOException;
+import java.util.ArrayList;
+
 import simpledb.common.Database;
 import simpledb.common.DbException;
-import simpledb.storage.BufferPool;
-import simpledb.storage.Tuple;
-import simpledb.storage.TupleDesc;
+import simpledb.common.Type;
+import simpledb.storage.*;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
+import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 /**
  * Inserts tuples read from the child operator into the tableId specified in the
@@ -15,6 +18,14 @@ import simpledb.transaction.TransactionId;
 public class Insert extends Operator {
 
     private static final long serialVersionUID = 1L;
+
+    private final TransactionId tid;
+    private final OpIterator child;
+    private final int tableId;
+    private final TupleDesc tupleDesc;
+    private OpIterator it;
+    private boolean flag;
+
 
     /**
      * Constructor.
@@ -31,24 +42,56 @@ public class Insert extends Operator {
      */
     public Insert(TransactionId t, OpIterator child, int tableId)
             throws DbException {
-        // some code goes here
+        this.tid = t;
+        this.child = child;
+        this.tupleDesc = new TupleDesc(new Type[]{Type.INT_TYPE}, new String[]{"deleted tuple count"});
+        this.it = null;
+        this.flag = false;
+        this.tableId = tableId;
     }
 
     public TupleDesc getTupleDesc() {
-        // some code goes here
-        return null;
+        return this.tupleDesc;
     }
 
     public void open() throws DbException, TransactionAbortedException {
-        // some code goes here
+        // 因为实际上 传来的child 内的Tuple 只能被insert一次，因此增加变量确保只被初始化一次
+        if(this.flag) {
+            assert this.it != null;
+            super.open();
+            this.it.open();
+            return ;
+        }
+        this.flag = true;
+        super.open();
+        this.child.open();
+        int cnt = 0;
+        while(this.child.hasNext()) {
+            try {
+                Database.getBufferPool().insertTuple(this.tid, this.tableId,this.child.next());
+                cnt ++;
+            } catch (IOException e) {
+                throw new DbException("insert tuple fail");
+            }
+        }
+        ArrayList<Tuple> tuples = new ArrayList<>();
+        Tuple tuple = new Tuple(this.tupleDesc);
+        tuple.setField(0, new IntField(cnt));
+        tuples.add(tuple);
+        this.it = new TupleIterator(this.tupleDesc, tuples);
+        this.it.open();
     }
 
     public void close() {
-        // some code goes here
+        super.close();
+        // child被多次close是harmless
+        this.child.close();
+        this.it.close();
     }
 
     public void rewind() throws DbException, TransactionAbortedException {
-        // some code goes here
+        this.close();
+        this.open();
     }
 
     /**
@@ -65,18 +108,22 @@ public class Insert extends Operator {
      * @see BufferPool#insertTuple
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
-        // some code goes here
-        return null;
+        if(!this.flag)
+            throw new DbException("not open yet");
+        if(this.it.hasNext()) {
+            return this.it.next();
+        } else {
+            return null;
+        }
     }
 
     @Override
     public OpIterator[] getChildren() {
-        // some code goes here
-        return null;
+        throw new NotImplementedException();
     }
 
     @Override
     public void setChildren(OpIterator[] children) {
-        // some code goes here
+        throw new NotImplementedException();
     }
 }
