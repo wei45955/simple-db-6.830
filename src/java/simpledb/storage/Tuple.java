@@ -110,8 +110,7 @@ public class Tuple implements Serializable {
      * */
     public Iterator<Field> fields()
     {
-        // some code goes here
-        return null;
+        return Arrays.asList(this.fields).iterator();
     }
 
     /**

@@ -24,6 +24,7 @@ public class HeapPage implements Page {
     final byte[] header;
     final Tuple[] tuples;
     final int numSlots;
+    private TransactionId lastModifyTid = null;
 
     byte[] oldData;
     private final Byte oldDataLock= (byte) 0;
@@ -79,12 +80,12 @@ public class HeapPage implements Page {
      * Computes the number of bytes in the header of a page in a HeapFile with each tuple occupying tupleSize bytes
      * @return the number of bytes in the header of a page in a HeapFile with each tuple occupying tupleSize bytes
      */
-    private int getHeaderSize() {        
-        int tuplesPerPage = this.getNumTuples();
-        if(tuplesPerPage % 8 == 0) {
+    private int getHeaderSize() {
+        int tuplesPerPage = this.numSlots;
+        if((tuplesPerPage % 8) == 0) {
             return tuplesPerPage / 8;
         } else {
-            return tuplesPerPage / 8 + 1;
+            return (tuplesPerPage / 8) + 1;
         }
     }
     
@@ -248,8 +249,13 @@ public class HeapPage implements Page {
      * @param t The tuple to delete
      */
     public void deleteTuple(Tuple t) throws DbException {
-        // some code goes here
-        // not necessary for lab1
+        RecordId recordId = t.getRecordId();
+        if(!this.pid.equals(recordId.getPageId()))
+            throw new DbException("the tuple is not in this HeapPage");
+        if(!this.isSlotUsed(recordId.getTupleNumber()))
+            throw new DbException("the tuple slot is already empty");
+
+        this.markSlotUsed(recordId.getTupleNumber(), false);
     }
 
     /**
@@ -260,8 +266,24 @@ public class HeapPage implements Page {
      * @param t The tuple to add.
      */
     public void insertTuple(Tuple t) throws DbException {
-        // some code goes here
-        // not necessary for lab1
+        if(this.getNumEmptySlots() <= 0)
+            throw new DbException("the page is full (no empty slots)");
+        if(!this.td.equals(t.getTupleDesc()))
+            throw new DbException("the TupleDesc is mismatch");
+
+        int emptySlot = -1;
+        for(int i = 0; i < this.numSlots; ++i) {
+            if(!this.isSlotUsed(i)) {
+                emptySlot = i;
+                break;
+            }
+        }
+        if(emptySlot == -1)
+            throw new DbException("the page is not full, but can't find a empty slot");
+
+        this.markSlotUsed(emptySlot, true);
+        t.setRecordId(new RecordId(this.pid, emptySlot));
+        this.tuples[emptySlot] = t;
     }
 
     /**
@@ -269,17 +291,18 @@ public class HeapPage implements Page {
      * that did the dirtying
      */
     public void markDirty(boolean dirty, TransactionId tid) {
-        // some code goes here
-	// not necessary for lab1
+        if(dirty) {
+            this.lastModifyTid = tid;
+        } else {
+            this.lastModifyTid = null;
+        }
     }
 
     /**
      * Returns the tid of the transaction that last dirtied this page, or null if the page is not dirty
      */
     public TransactionId isDirty() {
-        // some code goes here
-	// Not necessary for lab1
-        return null;      
+        return this.lastModifyTid;
     }
 
     /**
@@ -287,7 +310,7 @@ public class HeapPage implements Page {
      */
     public int getNumEmptySlots() {
         int rst = 0;
-        for(int i = 0; i < numSlots; ++i) {
+        for(int i = 0; i < this.numSlots; ++i) {
             if(!isSlotUsed(i)) rst ++;
         }
 
@@ -305,8 +328,11 @@ public class HeapPage implements Page {
      * Abstraction to fill or clear a slot on this page.
      */
     private void markSlotUsed(int i, boolean value) {
-        // some code goes here
-        // not necessary for lab1
+        if (value) {
+            this.header[i / 8] |= (1 << (i % 8));
+        } else {
+            this.header[i / 8] &= ~(1 << (i % 8));
+        }
     }
 
     /**
@@ -314,7 +340,7 @@ public class HeapPage implements Page {
      * (note that this iterator shouldn't return tuples in empty slots!)
      */
     public Iterator<Tuple> iterator() {
-        ArrayList<Tuple> validTuples = new ArrayList<Tuple>();
+        ArrayList<Tuple> validTuples = new ArrayList<>();
         for (int i = 0; i < this.numSlots; i++) {
             if (this.isSlotUsed(i)) {
                 validTuples.add(this.tuples[i]);
