@@ -130,7 +130,7 @@ public class JoinOptimizer {
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic
             // nested-loops join.
-            return -1.0;
+            return cost1 + cost2 * card1 + card1 * card2;
         }
     }
 
@@ -175,7 +175,21 @@ public class JoinOptimizer {
                                                    boolean t2pkey, Map<String, TableStats> stats,
                                                    Map<String, Integer> tableAliasToId) {
         int card = 1;
-        // some code goes here
+
+        if (joinOp == Predicate.Op.EQUALS) {
+            if (t1pkey && t2pkey) {
+                card = Math.min(card1, card2);
+            } else if (t1pkey) {
+                card = card2;
+            } else if (t2pkey) {
+                card = card1;
+            } else {
+                card = Math.max(card1, card2);
+            }
+        } else {
+            card = (int) (card1 * card2 * 0.3);
+        }
+
         return card <= 0 ? 1 : card;
     }
 
@@ -192,8 +206,6 @@ public class JoinOptimizer {
     public <T> Set<Set<T>> enumerateSubsets(List<T> v, int size) {
         Set<Set<T>> els = new HashSet<>();
         els.add(new HashSet<>());
-        // Iterator<Set> it;
-        // long start = System.currentTimeMillis();
 
         for (int i = 0; i < size; i++) {
             Set<Set<T>> newels = new HashSet<>();
@@ -233,12 +245,41 @@ public class JoinOptimizer {
      */
     public List<LogicalJoinNode> orderJoins(
             Map<String, TableStats> stats,
-            Map<String, Double> filterSelectivities, boolean explain)
+            Map<String, Double> filterSelectivities,
+            boolean explain)
+
             throws ParsingException {
 
-        // some code goes here
-        //Replace the following
-        return joins;
+        // optjoin
+        PlanCache pc = new PlanCache();
+        for (int i = 1; i <= this.joins.size(); i++) {
+            Set<Set<LogicalJoinNode>> subsets = this.enumerateSubsets(this.joins, i);
+            for(Set<LogicalJoinNode> s : subsets) {
+                // bestPlan
+                CostCard bestPlan = new CostCard();
+                bestPlan.cost = Double.MAX_VALUE;
+                for(LogicalJoinNode s_ : s) {
+                    CostCard plan = this.computeCostAndCardOfSubplan(
+                            stats,
+                            filterSelectivities,
+                            s_,
+                            s,
+                            bestPlan.cost,
+                            pc);
+                    if(plan != null) {
+                        bestPlan = plan;
+                    }
+                }
+                pc.addPlan(s, bestPlan.cost, bestPlan.card, bestPlan.plan);
+            }
+        }
+        List<LogicalJoinNode> optOrder = pc.getOrder(new HashSet<>(this.joins));
+
+        if(explain) {
+            this.printJoins(optOrder, pc,stats, filterSelectivities);
+        }
+
+        return optOrder;
     }
 
     // ===================== Private Methods =================================
@@ -277,8 +318,10 @@ public class JoinOptimizer {
     private CostCard computeCostAndCardOfSubplan(
             Map<String, TableStats> stats,
             Map<String, Double> filterSelectivities,
-            LogicalJoinNode joinToRemove, Set<LogicalJoinNode> joinSet,
-            double bestCostSoFar, PlanCache pc) throws ParsingException {
+            LogicalJoinNode joinToRemove,
+            Set<LogicalJoinNode> joinSet,
+            double bestCostSoFar,
+            PlanCache pc) throws ParsingException {
 
         LogicalJoinNode j = joinToRemove;
 
