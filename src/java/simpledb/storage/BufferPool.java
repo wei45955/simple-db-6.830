@@ -1,6 +1,7 @@
 package simpledb.storage;
 
 import simpledb.common.Database;
+import simpledb.transaction.TransactionLockManager;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
 import simpledb.transaction.TransactionAbortedException;
@@ -40,6 +41,8 @@ public class BufferPool {
     private final Map<PageId, Page> pagePool = new ConcurrentHashMap<>();
     private final Map<TransactionId, Set<PageId>> transactionPageMap  = new ConcurrentHashMap<>();
 
+    private final TransactionLockManager transactionLockManager;
+
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
@@ -47,6 +50,7 @@ public class BufferPool {
      */
     public BufferPool(int numPages) {
         this.numPages = numPages;
+        this.transactionLockManager = new TransactionLockManager();
     }
 
     public static int getPageSize() {
@@ -80,22 +84,24 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        // TODO perm还未处理
 
-        Set<PageId> pids = transactionPageMap.getOrDefault(tid, new HashSet<>());
+        // 获取读写锁 在事务结束的时候要释放锁
+        this.transactionLockManager.lock(tid, pid, perm);
+
+        Set<PageId> pids = this.transactionPageMap.getOrDefault(tid, new HashSet<>());
         pids.add(pid);
-        transactionPageMap.put(tid, pids);
+        this.transactionPageMap.put(tid, pids);
 
-        if(pagePool.containsKey(pid)) {
-            return pagePool.get(pid);
+        if(this.pagePool.containsKey(pid)) {
+            return this.pagePool.get(pid);
         }
 
-        if(pagePool.size() >= this.numPages) {
+        if(this.pagePool.size() >= this.numPages) {
             this.evictPage();
         }
 
         Page gotPage = Database.getCatalog().getDatabaseFile(pid.getTableId()).readPage(pid);
-        pagePool.put(pid, gotPage);
+        this.pagePool.put(pid, gotPage);
 
         return gotPage;
     }
@@ -110,8 +116,8 @@ public class BufferPool {
      * @param pid the ID of the page to unlock
      */
     public  void unsafeReleasePage(TransactionId tid, PageId pid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        // This method is primarily used for testing, and at the end of transactions.
+        this.transactionLockManager.unlock(tid, pid);
     }
 
     /**
@@ -120,15 +126,12 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      */
     public void transactionComplete(TransactionId tid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        this.transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
     public boolean holdsLock(TransactionId tid, PageId p) {
-        // some code goes here
-        // not necessary for lab1|lab2
-        return false;
+        return this.transactionLockManager.holdsLock(tid, p);
     }
 
     /**
@@ -139,8 +142,33 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        if(commit) {
+            try {
+                flushPages(tid);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            for(PageId pageId : this.transactionPageMap.get(tid)) {
+                if (pagePool.get(pageId) != null && tid.equals(pagePool.get(pageId).isDirty())) {
+                    // revert page
+                    // 可以直接恢复的原因是
+                    // 1. 写这个页只能同时只有一个事务，所以这是如果脏了，一定是本事务弄脏的
+                    // 2. 我们这里的实现是事务提交后，就将页面写回硬盘，也就是说硬盘的原页面都是最干净的
+                    //      （内存业内与硬盘原页不同的地方都是本事务写的）
+                    Page restoredPage = Database.getCatalog().getDatabaseFile(pageId.getTableId()).readPage(pageId);
+                    pagePool.put(pageId, restoredPage);
+                }
+            }
+        }
+
+        // 必须要将锁释放，否则前面的DeleteTest 和 InsertTest都死循环
+        for(PageId pageId : this.transactionPageMap.get(tid)) {
+            this.transactionLockManager.unlock(tid, pageId);
+        }
+
+        // 因为事务已经结束，也就不需要保存他获取过的 pageId 集合了
+        this.transactionPageMap.remove(tid);
     }
 
     /**
@@ -226,7 +254,7 @@ public class BufferPool {
      */
     private synchronized void flushPage(PageId pid) throws IOException {
         if(!this.pagePool.containsKey(pid))
-            throw new RuntimeException("flash a nonexistent page in bufferPool");
+            return;
         Page toFlushPage = this.pagePool.get(pid);
 
         if(toFlushPage.isDirty() != null) {
@@ -257,24 +285,12 @@ public class BufferPool {
             if (page.isDirty() != null)
                 continue;
 
-            try {
-                this.flushPage(page.getId());
-            } catch (IOException e) {
-                throw new DbException(e.getMessage());
-            }
-
             this.pagePool.remove(page.getId());
-            break;
+            // return 而不是 break
+            return;
         }
 
-        if(this.pagePool.size() == 0)
-            throw new DbException("Buffer pool size == 0");
-
-        try {
-            this.flushPage(this.pagePool.keySet().iterator().next());
-        } catch (IOException e) {
-            throw new DbException("flush page fail when evictPage");
-        }
+        throw new DbException("Can't find a not dirty page to evict");
     }
 
 }

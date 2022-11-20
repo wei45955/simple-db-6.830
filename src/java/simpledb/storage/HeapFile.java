@@ -132,7 +132,17 @@ public class HeapFile implements DbFile {
                 canInsertPageId = toReadPageId;
                 break;
             }
+
+            // 这里需要这样写，当像插入tuple插入empty slot时，发现没有空间，则需要将 read lock 释放掉
+            //Looking for an empty slot into which you can insert tuples. Most implementations
+            // scan pages looking for an empty slot, and will need a READ_ONLY lock to do this.
+            // Surprisingly, however, if a transaction t finds no free slot on a page p, t may immediately release the lock on p.
+            // Although this apparently contradicts the rules of two-phase locking,
+            // it is ok because t did not use any data from the page,
+            // such that a concurrent transaction t' which updated p cannot possibly affect the answer or outcome of t.
+            Database.getBufferPool().unsafeReleasePage(tid, toReadPageId);
         }
+
 
         List<Page> modifiedPages = new ArrayList<>();
         if(canInsertPageId != null) {
