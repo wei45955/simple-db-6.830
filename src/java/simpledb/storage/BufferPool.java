@@ -162,13 +162,16 @@ public class BufferPool {
             }
         }
 
-        // 必须要将锁释放，否则前面的DeleteTest 和 InsertTest都死循环
-        for(PageId pageId : this.transactionPageMap.get(tid)) {
-            this.transactionLockManager.unlock(tid, pageId);
-        }
+        // 因为可能创建了事务，但是没有读取过页，就提交事务
+        if(this.transactionPageMap.containsKey(tid)) {
+            // 必须要将锁释放，否则前面的DeleteTest 和 InsertTest都死循环
+            for(PageId pageId : this.transactionPageMap.get(tid)) {
+                this.transactionLockManager.unlock(tid, pageId);
+            }
 
-        // 因为事务已经结束，也就不需要保存他获取过的 pageId 集合了
-        this.transactionPageMap.remove(tid);
+            // 因为事务已经结束，也就不需要保存他获取过的 pageId 集合了
+            this.transactionPageMap.remove(tid);
+        }
     }
 
     /**
