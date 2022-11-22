@@ -151,13 +151,8 @@ public class BufferPool {
         } else {
             for(PageId pageId : this.transactionPageMap.get(tid)) {
                 if (pagePool.get(pageId) != null && tid.equals(pagePool.get(pageId).isDirty())) {
-                    // revert page
-                    // 可以直接恢复的原因是
-                    // 1. 写这个页只能同时只有一个事务，所以这是如果脏了，一定是本事务弄脏的
-                    // 2. 我们这里的实现是事务提交后，就将页面写回硬盘，也就是说硬盘的原页面都是最干净的
-                    //      （内存业内与硬盘原页不同的地方都是本事务写的）
-                    Page restoredPage = Database.getCatalog().getDatabaseFile(pageId.getTableId()).readPage(pageId);
-                    pagePool.put(pageId, restoredPage);
+                    // discardPage to impl revert page
+                    this.discardPage(pageId);
                 }
             }
         }
