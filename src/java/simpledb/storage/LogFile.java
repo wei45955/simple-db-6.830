@@ -459,9 +459,59 @@ public class LogFile {
         synchronized (Database.getBufferPool()) {
             synchronized(this) {
                 preAppend();
-                // some code goes here
+
+                // lab 6 exec1 there
+                final Long firstRecordPos = this.tidToFirstLogRecord.get(tid.getId());
+                System.out.println(firstRecordPos);
+                this.raf.seek(firstRecordPos);
+
+                while(true) {
+                    try {
+                        int type = this.raf.readInt();
+                        long curTid = this.raf.readLong();
+                        if(type == UPDATE_RECORD) {
+                            Page beforeImage = this.readPageData(this.raf);
+                            PageId pageId = beforeImage.getId();
+                            // skip after image
+                            this.readPageData(this.raf);
+                            if(curTid == tid.getId()) {
+//                                Database.getBufferPool().discardPage(pageId);
+//                                Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
+
+                                // resetBeforePage will reset page if page in BufferPool
+                                if(!Database.getBufferPool().resetBeforePage(pageId) ) {
+                                    Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
+                                }
+                            }
+                        } else if(type == CHECKPOINT_RECORD) {
+                            this.readCheckPoint(this.raf);
+                            // other types have no content
+                        } else if(type == ABORT_RECORD) {
+                            // never get there in fact
+                            if(curTid == tid.getId()) {
+                                break;
+                            }
+                        }
+                        // each record end contain long offset, skip it
+                        this.raf.readLong();
+                    } catch (EOFException e) {
+                        break;
+                    }
+                }
+
             }
         }
+    }
+
+    private Map<Long, Long> readCheckPoint(RandomAccessFile raf) throws IOException {
+        int count = raf.readInt();
+        Map<Long, Long> rtn = new HashMap<>();
+        while(count-- != 0) {
+            long tid = raf.readLong();
+            long firstRecordOffset = raf.readLong();
+            rtn.put(tid, firstRecordOffset);
+        }
+        return rtn;
     }
 
     /** Shutdown the logging system, writing out whatever state
@@ -486,7 +536,88 @@ public class LogFile {
         synchronized (Database.getBufferPool()) {
             synchronized (this) {
                 recoveryUndecided = false;
-                // some code goes here
+
+                // lab 6 exec 2 recovery there
+                this.raf.seek(0L);
+                long firstCP = this.raf.readLong();
+
+                Set<Long> needToCommit = new HashSet<>();
+
+                // tid to beforeImag
+                Map<Long, List<Page>> beforeImageMap = new HashMap<>();
+
+                // tid to afterImage
+                Map<Long, List<Page>> afterImageMap = new HashMap<>();
+
+                // in fact represent those tid which need to rollback
+                Map<Long, Long> activeTrans = null;
+                if(firstCP > 0L) {
+                    this.raf.seek(firstCP);
+                    activeTrans = this.readCheckPoint(this.raf);
+                } else {
+                    activeTrans = new HashMap<>();
+                }
+
+                this.raf.seek(0L);
+                this.raf.readLong();
+
+                while(true) {
+                    try {
+                        int type = this.raf.readInt();
+                        long tid = this.raf.readLong();
+                        if (type == BEGIN_RECORD) {
+                            activeTrans.put(tid, this.raf.getFilePointer());
+                        } else if (type == ABORT_RECORD) {
+                            activeTrans.remove(tid);
+                        } else if (type == COMMIT_RECORD) {
+                            activeTrans.remove(tid);
+                            needToCommit.add(tid);
+                        } else if (type == CHECKPOINT_RECORD) {
+                            this.readCheckPoint(this.raf);
+                        } else if (type == UPDATE_RECORD) {
+                            Page beforeImage = this.readPageData(this.raf);
+                            Page afterImage = this.readPageData(this.raf);
+                            if(!beforeImageMap.containsKey(tid)) {
+                                beforeImageMap.put(tid, new ArrayList<>());
+                            }
+                            if(!afterImageMap.containsKey(tid)) {
+                                afterImageMap.put(tid, new ArrayList<>());
+                            }
+                            beforeImageMap.get(tid).add(beforeImage);
+                            afterImageMap.get(tid).add(afterImage);
+                        }
+                        this.raf.readLong();
+                    } catch (EOFException e) {
+                        break;
+                    }
+                }
+
+                for(long tid : needToCommit) {
+                    List<Page> afterImage = afterImageMap.get(tid);
+                    // must check, otherwise NullPointerException
+                    if(afterImage == null) {
+                        continue;
+                    }
+                    for(Page page : afterImage) {
+                        // may don't need
+                        Database.getBufferPool().discardPage(page.getId());
+                        Database.getCatalog().getDatabaseFile(page.getId().getTableId()).writePage(page);
+                    }
+                }
+
+                for(long tid : activeTrans.keySet()) {
+                    List<Page> beforeImage = beforeImageMap.get(tid);
+                    // must check, otherwise NullPointerException
+                    if(beforeImage == null) {
+                        continue;
+                    }
+                    for(Page page : beforeImage) {
+                        // may don't need
+                        Database.getBufferPool().discardPage(page.getId());
+                        Database.getCatalog().getDatabaseFile(page.getId().getTableId()).writePage(page);
+                    }
+                }
+
             }
          }
     }

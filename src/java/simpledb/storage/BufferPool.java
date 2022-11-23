@@ -142,20 +142,31 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
+//        if(commit) {
+//            Set<PageId> list = this.transactionPageMap.get(tid);
+//            for(PageId id : list) {
+//                if(this.pagePool.containsKey(id)) {
+//                    this.pagePool.put(id, this.pagePool.get(id).getBeforeImage());
+//                }
+//            }
+//        }
+
         if(commit) {
             try {
-                flushPages(tid);
+                flushPages(tid, true);
             } catch (IOException e) {
                 e.printStackTrace();
             }
-        } else {
-            for(PageId pageId : this.transactionPageMap.get(tid)) {
-                if (pagePool.get(pageId) != null && tid.equals(pagePool.get(pageId).isDirty())) {
-                    // discardPage to impl revert page
-                    this.discardPage(pageId);
-                }
-            }
         }
+//        // don't need now, because some page may hava flush to disk
+//        else {
+//            for(PageId pageId : this.transactionPageMap.get(tid)) {
+//                if (pagePool.get(pageId) != null && tid.equals(pagePool.get(pageId).isDirty())) {
+//                    // discardPage to impl revert page
+//                    this.discardPage(pageId);
+//                }
+//            }
+//        }
 
         // 因为可能创建了事务，但是没有读取过页，就提交事务
         if(this.transactionPageMap.containsKey(tid)) {
@@ -246,30 +257,54 @@ public class BufferPool {
         this.pagePool.remove(pid);
     }
 
+    public synchronized boolean resetBeforePage(PageId pid) {
+        if(this.pagePool.containsKey(pid)) {
+            this.pagePool.put(pid, this.pagePool.get(pid).getBeforeImage());
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    private synchronized void flushPage(PageId pid) throws IOException {
+        flushPage(pid,false);
+    }
+
     /**
      * Flushes a certain page to disk
      * @param pid an ID indicating the page to flush
      */
-    private synchronized void flushPage(PageId pid) throws IOException {
+    private synchronized void flushPage(PageId pid, boolean needSetBeforeImage) throws IOException {
         if(!this.pagePool.containsKey(pid))
             return;
         Page toFlushPage = this.pagePool.get(pid);
 
         if(toFlushPage.isDirty() != null) {
+
+            // start:add at lab 6 start, to make steal and no force
+            Database.getLogFile().logWrite(toFlushPage.isDirty(), toFlushPage.getBeforeImage(), toFlushPage);
+            Database.getLogFile().force();
+            // add end
+
             DbFile tableFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
             tableFile.writePage(toFlushPage);
             toFlushPage.markDirty(false, null);
+
+            // add at lab 6 start
+            if(needSetBeforeImage) {
+                toFlushPage.setBeforeImage();
+            }
         }
     }
 
     /** Write all pages of the specified transaction to disk.
      */
-    public synchronized void flushPages(TransactionId tid) throws IOException {
+    public synchronized void flushPages(TransactionId tid, boolean setBeforeImage) throws IOException {
         if(!this.transactionPageMap.containsKey(tid))
             return;
         Set<PageId> list = this.transactionPageMap.get(tid);
         for(PageId id : list) {
-            this.flushPage(id);
+            this.flushPage(id, setBeforeImage);
         }
     }
 
