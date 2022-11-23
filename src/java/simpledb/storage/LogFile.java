@@ -479,9 +479,8 @@ public class LogFile {
 //                                Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
 
                                 // resetBeforePage will reset page if page in BufferPool
-                                if(!Database.getBufferPool().resetBeforePage(pageId) ) {
-                                    Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
-                                }
+                                Database.getBufferPool().discardPage(pageId);
+                                Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
                             }
                         } else if(type == CHECKPOINT_RECORD) {
                             this.readCheckPoint(this.raf);

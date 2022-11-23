@@ -257,15 +257,6 @@ public class BufferPool {
         this.pagePool.remove(pid);
     }
 
-    public synchronized boolean resetBeforePage(PageId pid) {
-        if(this.pagePool.containsKey(pid)) {
-            this.pagePool.put(pid, this.pagePool.get(pid).getBeforeImage());
-            return true;
-        } else {
-            return false;
-        }
-    }
-
     private synchronized void flushPage(PageId pid) throws IOException {
         flushPage(pid,false);
     }
