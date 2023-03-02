@@ -150,6 +150,8 @@ public class BufferPool {
 
     /**
      * Release all locks associated with a given transaction.
+     * <br/>
+     * 主要是用于Test调用的
      *
      * @param tid the ID of the transaction requesting the unlock
      */
@@ -165,47 +167,48 @@ public class BufferPool {
     /**
      * Commit or abort a given transaction; release all locks associated to
      * the transaction.
+     * <br/>
+     * 真正的入口，在Transaction内，调用这里，传入不同的参数
      *
      * @param tid the ID of the transaction requesting the unlock
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
-//        if(commit) {
-//            Set<PageId> list = this.transactionPageMap.get(tid);
-//            for(PageId id : list) {
-//                if(this.pagePool.containsKey(id)) {
-//                    this.pagePool.put(id, this.pagePool.get(id).getBeforeImage());
-//                }
-//            }
-//        }
-
         if(commit) {
-            try {
-                flushPages(tid, true);
-            } catch (IOException e) {
-                e.printStackTrace();
+            if(this.transactionPageMap.containsKey(tid)) {
+                for(PageId pageId: this.transactionPageMap.get(tid)) {
+                    setBeforePageAndResetDirty(pageId);
+                }
             }
+            // no need to flush, because WAL
+            // try {
+            //     flushPages(tid, true);
+            // } catch (IOException e) {
+            //     e.printStackTrace();
+            // }
         }
-//        // don't need now, because some page may hava flush to disk
-//        else {
-//            for(PageId pageId : this.transactionPageMap.get(tid)) {
-//                if (pagePool.get(pageId) != null && tid.equals(pagePool.get(pageId).isDirty())) {
-//                    // discardPage to impl revert page
-//                    this.discardPage(pageId);
-//                }
-//            }
-//        }
-
         // 因为可能创建了事务，但是没有读取过页，就提交事务
         if(this.transactionPageMap.containsKey(tid)) {
             // 必须要将锁释放，否则前面的DeleteTest 和 InsertTest都死循环
             for(PageId pageId : this.transactionPageMap.get(tid)) {
+                // 这里不需要将page从BufferPool释放，因为如果是回滚的话，
+                // LogFile的rollback()会释放，当然释放也没关系
                 this.transactionLockManager.unlock(tid, pageId);
             }
 
             // 因为事务已经结束，也就不需要保存他获取过的 pageId 集合了
             this.transactionPageMap.remove(tid);
         }
+    }
+
+    // 用于正常事务的提交，因为有了WAL，直接把页面设置为干净就好了
+    private void setBeforePageAndResetDirty(PageId pageId) {
+        if(!this.pagePool.containsKey(pageId)) {
+            return;
+        }
+        Page toSetPage = this.pagePool.get(pageId).value;
+        toSetPage.markDirty(false, null);
+        toSetPage.setBeforeImage();
     }
 
     /**
@@ -233,7 +236,10 @@ public class BufferPool {
         for(Page dirtiedPage : addedPageList) {
             // 下面这一句不需要，因为对应的 DbFile 对象就是从BufferPool获取的（getPage），对这个引用更新，就是同步的
             // this.pagePoll.put(page.getId() , page);
+
             dirtiedPage.markDirty(true, tid);
+            // 修改后，写日志
+            toWALWriteUpdateRecord(dirtiedPage);
         }
     }
 
@@ -258,8 +264,11 @@ public class BufferPool {
         List<Page> dirtiedPages = file.deleteTuple(tid, t);
 
         // mark as dirty
-        for (Page dirtiedPage : dirtiedPages)
+        for (Page dirtiedPage : dirtiedPages) {
             dirtiedPage.markDirty(true, tid);
+            // 修改后，写日志
+            toWALWriteUpdateRecord(dirtiedPage);
+        }
     }
 
     /**
@@ -271,6 +280,11 @@ public class BufferPool {
         for(Map.Entry<PageId, PageNode> entry : pagePool.entrySet()) {
             this.flushPage(entry.getKey());
         }
+    }
+
+    private void toWALWriteUpdateRecord(Page toWAL) throws IOException {
+        Database.getLogFile().logWrite(toWAL.isDirty(), toWAL.getBeforeImage(), toWAL);
+        Database.getLogFile().force();
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -305,8 +319,9 @@ public class BufferPool {
         if(toFlushPage.isDirty() != null) {
 
             // start:add at lab 6 start, to make steal and no force
-            Database.getLogFile().logWrite(toFlushPage.isDirty(), toFlushPage.getBeforeImage(), toFlushPage);
-            Database.getLogFile().force();
+            // 实验要求做的，但是思考后，觉得不必要
+           // Database.getLogFile().logWrite(toFlushPage.isDirty(), toFlushPage.getBeforeImage(), toFlushPage);
+           // Database.getLogFile().force();
             // add end
 
             DbFile tableFile = Database.getCatalog().getDatabaseFile(pid.getTableId());

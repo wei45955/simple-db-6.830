@@ -475,9 +475,6 @@ public class LogFile {
                             // skip after image
                             this.readPageData(this.raf);
                             if(curTid == tid.getId()) {
-//                                Database.getBufferPool().discardPage(pageId);
-//                                Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
-
                                 // resetBeforePage will reset page if page in BufferPool
                                 Database.getBufferPool().discardPage(pageId);
                                 Database.getCatalog().getDatabaseFile(pageId.getTableId()).writePage(beforeImage);
