@@ -52,7 +52,9 @@ public class TransactionLockManager {
                 throw new TransactionAbortedException();
             }
             while (lockItem.exclusiveTransaction != null && !lockItem.exclusiveTransaction.equals(tid)) {
-                lockItem.cond.await();
+                if(!lockItem.cond.await(DEADLOCKTIMEOUT, TIME_UNIT)) {
+                    throw new TransactionAbortedException();
+                }
             }
             lockItem.sharedTransactions.add(tid);
         } catch (InterruptedException e) {
@@ -75,7 +77,9 @@ public class TransactionLockManager {
             while (lockItem.exclusiveTransaction != null && !tid.equals(lockItem.exclusiveTransaction)
                     || (!lockItem.sharedTransactions.isEmpty() &&
                     !(lockItem.sharedTransactions.size() == 1 && lockItem.sharedTransactions.contains(tid)))) {
-                lockItem.cond.await();
+                if(!lockItem.cond.await(DEADLOCKTIMEOUT, TIME_UNIT)) {
+                    throw new TransactionAbortedException();
+                }
             }
             lockItem.exclusiveTransaction = tid;
         } catch (InterruptedException e) {
@@ -118,7 +122,6 @@ public class TransactionLockManager {
         } finally {
             lockItem.lock.unlock();
         }
-
     }
 
 }

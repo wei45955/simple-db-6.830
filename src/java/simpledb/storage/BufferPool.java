@@ -9,10 +9,7 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -27,6 +24,30 @@ import java.util.concurrent.ConcurrentHashMap;
  * @Threadsafe, all fields are final
  */
 public class BufferPool {
+    // use for LRU mechanism
+    private static class PageNode {
+        PageNode prev; PageNode next;
+        PageId key; Page value;
+        PageNode(PageId key, Page value) {
+            this.key = key; this.value = value;
+        }
+        public PageNode() {}
+    }
+    private final PageNode head;
+    private final PageNode tail;
+    private void moveToTail(PageNode cur, boolean needToDeleteOriNode) {
+        if(needToDeleteOriNode) {
+            deleteNode(cur);
+        }
+        cur.next = tail;
+        cur.prev = tail.prev;
+        tail.prev.next = cur;
+        tail.prev = cur;
+    }
+    private void deleteNode(PageNode toDelete) {
+        toDelete.prev.next = toDelete.next;
+        toDelete.next.prev = toDelete.prev;
+    }
     /** Bytes per page, including header. */
     private static final int DEFAULT_PAGE_SIZE = 4096;
 
@@ -38,7 +59,8 @@ public class BufferPool {
     public static final int DEFAULT_PAGES = 50;
 
     private final int numPages;
-    private final Map<PageId, Page> pagePool = new ConcurrentHashMap<>();
+    private final Map<PageId, PageNode> pagePool = new ConcurrentHashMap<>();
+
     private final Map<TransactionId, Set<PageId>> transactionPageMap  = new ConcurrentHashMap<>();
 
     private final TransactionLockManager transactionLockManager;
@@ -51,6 +73,9 @@ public class BufferPool {
     public BufferPool(int numPages) {
         this.numPages = numPages;
         this.transactionLockManager = new TransactionLockManager();
+        // use for LRU
+        tail = new PageNode(); head = new PageNode();
+        tail.prev = head; head.next = tail;
     }
 
     public static int getPageSize() {
@@ -93,7 +118,8 @@ public class BufferPool {
         this.transactionPageMap.put(tid, pids);
 
         if(this.pagePool.containsKey(pid)) {
-            return this.pagePool.get(pid);
+            moveToTail(this.pagePool.get(pid), true);
+            return this.pagePool.get(pid).value;
         }
 
         if(this.pagePool.size() >= this.numPages) {
@@ -101,7 +127,9 @@ public class BufferPool {
         }
 
         Page gotPage = Database.getCatalog().getDatabaseFile(pid.getTableId()).readPage(pid);
-        this.pagePool.put(pid, gotPage);
+        PageNode toAdd = new PageNode(pid, gotPage);
+        this.pagePool.put(pid, toAdd);
+        moveToTail(toAdd, false);
 
         return gotPage;
     }
@@ -240,7 +268,7 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        for(Map.Entry<PageId, Page> entry : pagePool.entrySet()) {
+        for(Map.Entry<PageId, PageNode> entry : pagePool.entrySet()) {
             this.flushPage(entry.getKey());
         }
     }
@@ -254,6 +282,10 @@ public class BufferPool {
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
+        PageNode toDiscard = pagePool.get(pid);
+        if(toDiscard != null) {
+            deleteNode(toDiscard);
+        }
         this.pagePool.remove(pid);
     }
 
@@ -268,7 +300,7 @@ public class BufferPool {
     private synchronized void flushPage(PageId pid, boolean needSetBeforeImage) throws IOException {
         if(!this.pagePool.containsKey(pid))
             return;
-        Page toFlushPage = this.pagePool.get(pid);
+        Page toFlushPage = this.pagePool.get(pid).value;
 
         if(toFlushPage.isDirty() != null) {
 
@@ -305,16 +337,15 @@ public class BufferPool {
      */
     private synchronized void evictPage() throws DbException {
         // random pick
-        for (Page page : this.pagePool.values()) {
-            if (page.isDirty() != null)
-                continue;
-
-            this.pagePool.remove(page.getId());
-            // return 而不是 break
-            return;
+        PageNode toDelete = head.next;
+        // todo flush page related, how to deal with actually?
+        try {
+            flushPage(toDelete.key);
+        } catch (IOException e) {
+            throw new DbException("flush page IOException");
         }
-
-        throw new DbException("Can't find a not dirty page to evict");
+        deleteNode(toDelete);
+        this.pagePool.remove(toDelete.key);
     }
 
 }
