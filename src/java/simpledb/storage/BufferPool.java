@@ -155,7 +155,7 @@ public class BufferPool {
      *
      * @param tid the ID of the transaction requesting the unlock
      */
-    public void transactionComplete(TransactionId tid) {
+    public void transactionComplete(TransactionId tid)  {
         this.transactionComplete(tid, true);
     }
 
@@ -177,15 +177,19 @@ public class BufferPool {
         if(commit) {
             if(this.transactionPageMap.containsKey(tid)) {
                 for(PageId pageId: this.transactionPageMap.get(tid)) {
-                    setBeforePageAndResetDirty(pageId);
+                    // 如果没有，说明已经被提前刷盘了
+                    if(!this.pagePool.containsKey(pageId)) {
+                        continue;
+                    }
+                    Page toOperatePage = this.pagePool.get(pageId).value;
+                    if(toOperatePage.isDirty() == null) continue;
+
+                    toWALWriteUpdateRecord(toOperatePage);
+                    // add end
+                    toOperatePage.markDirty(false, null);
+                    toOperatePage.setBeforeImage();
                 }
             }
-            // no need to flush, because WAL
-            // try {
-            //     flushPages(tid, true);
-            // } catch (IOException e) {
-            //     e.printStackTrace();
-            // }
         }
         // 因为可能创建了事务，但是没有读取过页，就提交事务
         if(this.transactionPageMap.containsKey(tid)) {
@@ -199,16 +203,6 @@ public class BufferPool {
             // 因为事务已经结束，也就不需要保存他获取过的 pageId 集合了
             this.transactionPageMap.remove(tid);
         }
-    }
-
-    // 用于正常事务的提交，因为有了WAL，直接把页面设置为干净就好了
-    private void setBeforePageAndResetDirty(PageId pageId) {
-        if(!this.pagePool.containsKey(pageId)) {
-            return;
-        }
-        Page toSetPage = this.pagePool.get(pageId).value;
-        toSetPage.markDirty(false, null);
-        toSetPage.setBeforeImage();
     }
 
     /**
@@ -238,8 +232,6 @@ public class BufferPool {
             // this.pagePoll.put(page.getId() , page);
 
             dirtiedPage.markDirty(true, tid);
-            // 修改后，写日志
-            toWALWriteUpdateRecord(dirtiedPage);
         }
     }
 
@@ -266,8 +258,6 @@ public class BufferPool {
         // mark as dirty
         for (Page dirtiedPage : dirtiedPages) {
             dirtiedPage.markDirty(true, tid);
-            // 修改后，写日志
-            toWALWriteUpdateRecord(dirtiedPage);
         }
     }
 
@@ -282,9 +272,13 @@ public class BufferPool {
         }
     }
 
-    private void toWALWriteUpdateRecord(Page toWAL) throws IOException {
-        Database.getLogFile().logWrite(toWAL.isDirty(), toWAL.getBeforeImage(), toWAL);
-        Database.getLogFile().force();
+    private void toWALWriteUpdateRecord(Page toWAL) {
+        try {
+            Database.getLogFile().logWrite(toWAL.isDirty(), toWAL.getBeforeImage(), toWAL);
+            Database.getLogFile().force();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -303,46 +297,28 @@ public class BufferPool {
         this.pagePool.remove(pid);
     }
 
-    private synchronized void flushPage(PageId pid) throws IOException {
-        flushPage(pid,false);
-    }
 
     /**
      * Flushes a certain page to disk
      * @param pid an ID indicating the page to flush
      */
-    private synchronized void flushPage(PageId pid, boolean needSetBeforeImage) throws IOException {
+    private synchronized void flushPage(PageId pid) {
         if(!this.pagePool.containsKey(pid))
             return;
         Page toFlushPage = this.pagePool.get(pid).value;
 
         if(toFlushPage.isDirty() != null) {
-
             // start:add at lab 6 start, to make steal and no force
-            // 实验要求做的，但是思考后，觉得不必要
-           // Database.getLogFile().logWrite(toFlushPage.isDirty(), toFlushPage.getBeforeImage(), toFlushPage);
-           // Database.getLogFile().force();
-            // add end
-
-            DbFile tableFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
-            tableFile.writePage(toFlushPage);
-            toFlushPage.markDirty(false, null);
-
-            // add at lab 6 start
-            if(needSetBeforeImage) {
-                toFlushPage.setBeforeImage();
+            try {
+                toWALWriteUpdateRecord(toFlushPage);
+                DbFile tableFile = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                tableFile.writePage(toFlushPage);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
-        }
-    }
-
-    /** Write all pages of the specified transaction to disk.
-     */
-    public synchronized void flushPages(TransactionId tid, boolean setBeforeImage) throws IOException {
-        if(!this.transactionPageMap.containsKey(tid))
-            return;
-        Set<PageId> list = this.transactionPageMap.get(tid);
-        for(PageId id : list) {
-            this.flushPage(id, setBeforeImage);
+            // add end
+            // 不知道为什么 这里不可以将他设成脏页
+            // toFlushPage.markDirty(false, null);
         }
     }
 
@@ -354,11 +330,7 @@ public class BufferPool {
         // random pick
         PageNode toDelete = head.next;
         // todo flush page related, how to deal with actually?
-        try {
-            flushPage(toDelete.key);
-        } catch (IOException e) {
-            throw new DbException("flush page IOException");
-        }
+        flushPage(toDelete.key);
         deleteNode(toDelete);
         this.pagePool.remove(toDelete.key);
     }
